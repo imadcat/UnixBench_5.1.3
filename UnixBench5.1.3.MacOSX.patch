@@ -1,0 +1,124 @@
+diff -ur UnixBench.default/Makefile UnixBench/Makefile
+--- UnixBench.default/Makefile	2011-01-18 15:44:53.000000000 +0900
++++ UnixBench/Makefile	2014-04-18 18:27:32.000000000 +0900
+@@ -58,7 +58,7 @@
+ # OPTIMISATION SETTINGS:
+ 
+ ## Very generic
+-#OPTON = -O
++OPTON = -O -Wall
+ 
+ ## For Linux 486/Pentium, GCC 2.7.x and 2.8.x
+ #OPTON = -O2 -fomit-frame-pointer -fforce-addr -fforce-mem -ffast-math \
+@@ -71,7 +71,7 @@
+ #	-m386 -malign-loops=1 -malign-jumps=1 -malign-functions=1
+ 
+ ## For Solaris 2, or general-purpose GCC 2.7.x
+-OPTON = -O2 -fomit-frame-pointer -fforce-addr -ffast-math -Wall
++#OPTON = -O2 -fomit-frame-pointer -fforce-addr -ffast-math -Wall
+ 
+ ## For Digital Unix v4.x, with DEC cc v5.x
+ #OPTON = -O4
+diff -ur UnixBench.default/Run UnixBench/Run
+--- UnixBench.default/Run	2011-01-18 15:44:53.000000000 +0900
++++ UnixBench/Run	2014-04-18 19:22:33.000000000 +0900
+@@ -672,28 +672,18 @@
+ # these fields:
+ # describing the model etc.  Returns undef if the information can't be got.
+ sub getCpuInfo {
+-    open(my $fd, "<", "/proc/cpuinfo") || return undef;
++    my $model = getCmdOutput("sysctl -n machdep.cpu.brand_string");
++    my $flags = getCmdOutput("sysctl -n machdep.cpu.features | tr [A-Z] [a-z]");
++    my $ncpu  = getCmdOutput("sysctl -n hw.ncpu");
+ 
+     my $cpus = [ ];
+     my $cpu = 0;
+-    while (<$fd>) {
+-        chomp;
+-        my ( $field, $val ) = split(/[ \t]*:[ \t]*/);
+-        next if (!$field || !$val);
+-        if ($field eq "processor") {
+-            $cpu = $val;
+-        } elsif ($field eq "model name") {
+-            my $model = $val;
+-            $model =~ s/  +/ /g;
+-            $cpus->[$cpu]{'model'} = $model;
+-        } elsif ($field eq "bogomips") {
+-            $cpus->[$cpu]{'bogo'} = $val;
+-        } elsif ($field eq "flags") {
+-            $cpus->[$cpu]{'flags'} = processCpuFlags($val);
+-        }
+-    }
+ 
+-    close($fd);
++    for ($cpu = 0; $cpu < $ncpu; $cpu++) {
++        $cpus->[$cpu]{'model'} = $model;
++        $cpus->[$cpu]{'bogo'}  = 0;
++        $cpus->[$cpu]{'flags'} = processCpuFlags($flags);
++    }
+ 
+     $cpus;
+ }
+@@ -723,7 +713,7 @@
+     $info->{'osRel'} = getCmdOutput("uname -r");
+     $info->{'osVer'} = getCmdOutput("uname -v");
+     $info->{'mach'} = getCmdOutput("uname -m");
+-    $info->{'platform'} = getCmdOutput("uname -i");
++    $info->{'platform'} = getCmdOutput("uname -i") || "unknown";
+ 
+     # Get the system name (SUSE, Red Hat, etc.) if possible.
+     $info->{'system'} = $info->{'os'};
+@@ -735,9 +725,9 @@
+ 
+     # Get the language info.
+     my $lang = getCmdOutput("printenv LANG");
+-    my $map = getCmdOutput("locale -k LC_CTYPE | grep charmap");
++    my $map = getCmdOutput("locale -k LC_CTYPE | grep charmap") || "";
+     $map =~ s/.*=//;
+-    my $coll = getCmdOutput("locale -k LC_COLLATE | grep collate-codeset");
++    my $coll = getCmdOutput("locale -k LC_COLLATE | grep collate-codeset") || "";
+     $coll =~ s/.*=//;
+     $info->{'language'} = sprintf "%s (charmap=%s, collate=%s)",
+                                    $lang, $map, $coll;
+@@ -753,7 +743,7 @@
+     $info->{'graphics'} = getCmdOutput("3dinfo | cut -f1 -d\'(\'");
+ 
+     # Get system run state, load and usage info.
+-    $info->{'runlevel'} = getCmdOutput("runlevel | cut -f2 -d\" \"");
++    $info->{'runlevel'} = getCmdOutput("who -r | awk '{print \$3}'");
+     $info->{'load'} = getCmdOutput("uptime");
+     $info->{'numUsers'} = getCmdOutput("who | wc -l");
+ 
+diff -ur UnixBench.default/src/context1.c UnixBench/src/context1.c
+--- UnixBench.default/src/context1.c	2011-01-18 15:44:53.000000000 +0900
++++ UnixBench/src/context1.c	2014-04-18 19:18:48.000000000 +0900
+@@ -44,6 +44,7 @@
+ 	int duration;
+ 	unsigned long	check;
+ 	int	p1[2], p2[2];
++	ssize_t ret;
+ 
+ 	if (argc != 2) {
+ 		fprintf(stderr, "Usage: context duration\n");
+@@ -70,8 +71,8 @@
+ 					perror("master write failed");
+ 				exit(1);
+ 			}
+-			if (read(p2[0], (char *)&check, sizeof(check)) != sizeof(check)) {
+-				if ((errno != 0) && (errno != EINTR))
++			if ((ret = read(p2[0], (char *)&check, sizeof(check))) != sizeof(check)) {
++				if ((ret == -1) && (errno != 0) && (errno != EINTR))
+ 					perror("master read failed");
+ 				exit(1);
+ 			}
+@@ -90,8 +91,8 @@
+ 		/* slave, read p1 & write p2 */
+ 		close(p1[1]); close(p2[0]);
+ 		while (1) {
+-			if (read(p1[0], (char *)&check, sizeof(check)) != sizeof(check)) {
+-				if ((errno != 0) && (errno != EINTR))
++			if ((ret = read(p1[0], (char *)&check, sizeof(check))) != sizeof(check)) {
++				if ((ret == -1) && (errno != 0) && (errno != EINTR))
+ 					perror("slave read failed");
+ 				exit(1);
+ 			}
